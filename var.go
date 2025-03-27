@@ -26,4 +26,5 @@ const (
 	Walmart       = "walmart"
 	UberEats      = "ubereats"
 	UberEatsPromo = "ubereatspromo"
+	BestBuy       = "bestbuy"
 )

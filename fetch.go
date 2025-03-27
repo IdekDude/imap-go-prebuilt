@@ -49,6 +49,14 @@ func (n *ImapOpts) FetchEmail() (string, error) {
 			}
 			time.Sleep(5 * time.Second)
 		}
+	case BestBuy:
+		for i := 1; i < n.MaxChecks; i++ {
+			message, err = n.getBBActivationCode()
+			if err == nil {
+				break
+			}
+			time.Sleep(5 * time.Second)
+		}
 	}
 	return message, err
 }
