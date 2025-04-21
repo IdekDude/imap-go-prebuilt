@@ -25,7 +25,7 @@ func TestUberEatsPromo(t *testing.T) {
 	for email, list := range promos {
 		log.Printf("Email: %s\n", email)
 		for _, promo := range list {
-			log.Printf(" %s - %s\n", promo["promoCode"], promo["promoType"])
+			log.Printf(" %s - %s - %s\n", promo["promoCode"], promo["promoType"], promo["promoExpiration"])
 		}
 	}
 }
