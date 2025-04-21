@@ -54,8 +54,8 @@ func (n *ImapOpts) FetchEmail() (string, error) {
 }
 
 // fetch the email information with the prebuilt functions for multiple accounts
-func (n *ImapOpts) FetchEmailForMultipleAccounts() (map[string]map[string]string, error) {
-	var messages map[string]map[string]string
+func (n *ImapOpts) FetchEmailForMultipleAccounts() (map[string][]map[string]string, error) {
+	var messages map[string][]map[string]string
 	var err error
 	switch n.Site {
 	case UberEatsPromo:

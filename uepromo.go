@@ -6,6 +6,7 @@ import (
 	"io"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/emersion/go-imap"
 	"github.com/emersion/go-imap/client"
@@ -13,156 +14,118 @@ import (
 	"github.com/emersion/go-message/mail"
 )
 
-// get promo code from ubereats with multiple emails
-func (n *ImapOpts) getUberEatsPromo() (map[string]map[string]string, error) {
-	// Connect to the server
+// get promo code from ubereats with optional days filtering and optional receiver emails filtering
+func (n *ImapOpts) getUberEatsPromo() (map[string][]map[string]string, error) {
 	c, err := client.DialTLS(n.Imap.Imap, nil)
 	if err != nil {
 		return nil, errors.New("could not connect to mail server")
 	}
 	defer c.Logout()
 
-	// handle login
 	if n.CatchallPass == "" {
 		if err := c.Login(n.ReceiverEmail, n.ReceiverPass); err != nil {
-			return nil, fmt.Errorf("login and password are incorrect: %s:%s - %s", n.ReceiverEmail, n.ReceiverPass, err.Error())
+			return nil, fmt.Errorf("login failed: %v", err)
 		}
 	} else {
 		if err := c.Login(n.CatchallEmail, n.CatchallPass); err != nil {
-			return nil, fmt.Errorf("login and password are incorrect: %s:%s - %s", n.CatchallEmail, n.CatchallPass, err.Error())
+			return nil, fmt.Errorf("login failed: %v", err)
 		}
 	}
 
-	// now we grab our mails
-	var boxes []string
-	mailboxes := make(chan *imap.MailboxInfo, 5)
-	done := make(chan error, 1)
-	go func() {
-		done <- c.List("", "*", mailboxes)
-	}()
-
-	for m := range mailboxes {
-		if m.Name == "[Gmail]/Important" {
-			continue
-		}
-		boxes = append(boxes, m.Name)
+	criteria := &imap.SearchCriteria{}
+	if n.Days > 0 {
+		criteria.Since = time.Now().AddDate(0, 0, -n.Days)
 	}
 
-	if err := <-done; err != nil {
-		return nil, fmt.Errorf("login and password are incorrect: %s:%s - %s", n.CatchallEmail, n.CatchallPass, err.Error())
-	}
+	mailboxes := []string{"INBOX"}
+	results := make(map[string][]map[string]string)
 
-	for _, box := range boxes {
-		// Select INBOX
-		mbox, err := c.Select(box, false)
+	for _, box := range mailboxes {
+		_, err := c.Select(box, false)
 		if err != nil {
 			continue
 		}
 
-		// Get the last message
-		if mbox.Messages == 0 {
+		ids, err := c.Search(criteria)
+		if err != nil || len(ids) == 0 {
 			continue
 		}
 
-		var to, from uint32
-		if mbox.Messages > 30 {
-			from = mbox.Messages
-			to = mbox.Messages - 30
-		} else {
-			from = mbox.Messages
-			to = 0
-		}
-
 		seqSet := new(imap.SeqSet)
-		seqSet.AddRange(from, to)
+		seqSet.AddNum(ids...)
 
-		// Get the whole message body
-		var section imap.BodySectionName
+		section := &imap.BodySectionName{}
 		items := []imap.FetchItem{section.FetchItem()}
 
 		messages := make(chan *imap.Message, 8)
-
 		go func() {
 			c.Fetch(seqSet, items, messages)
 		}()
 
-		var address, fromaddress, mailsubject string
-
 		for msg := range messages {
-
-			// If the message is null or if the activation email was found then skip the email
 			if msg == nil {
 				continue
 			}
 
-			r := msg.GetBody(&section)
+			r := msg.GetBody(section)
 			if r == nil {
 				continue
 			}
 
-			// Create a new mail reader
 			mr, err := mail.CreateReader(r)
 			if err != nil {
 				continue
 			}
 
-			// Print some info about the message
 			header := mr.Header
-
-			if subject, err := header.Subject(); err == nil {
-				mailsubject = strings.ToLower(subject)
-			}
-
-			if !strings.Contains(mailsubject, "$") {
+			subject, err := header.Subject()
+			if err != nil || !strings.Contains(strings.ToLower(subject), "$") {
 				continue
 			}
 
-			if from, err := header.AddressList("From"); err == nil {
-				fromaddress = from[0].String()
-			}
-
-			if !strings.Contains(strings.ToLower(fromaddress), "uber@uber.com") {
+			from, err := header.AddressList("From")
+			if err != nil || len(from) == 0 || !strings.Contains(strings.ToLower(from[0].Address), "uber@uber.com") {
 				continue
 			}
 
-			if to, err := header.AddressList("To"); err == nil {
-				if len(to) == 0 {
+			to, err := header.AddressList("To")
+			if err != nil || len(to) == 0 {
+				continue
+			}
+
+			address := strings.Trim(to[0].Address, "<>")
+
+			if len(n.ReceiverEmails) > 0 {
+				if _, exists := n.ReceiverEmails[strings.ToLower(address)]; !exists {
 					continue
 				}
-				address = strings.Trim(to[0].String(), "<>")
 			}
 
-			if _, exists := n.ReceiverEmails[strings.ToLower(strings.Trim(address, "<>"))]; exists {
-				// if the email is in the map, we can now start reading the email
-				for {
-					p, err := mr.NextPart()
-					if err == io.EOF {
-						break
-					} else if err != nil {
-						break
-					}
+			for {
+				p, err := mr.NextPart()
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					break
+				}
 
-					switch p.Header.(type) {
-					case *mail.InlineHeader:
-						// This is the message's text (can be plain-text or HTML)
-						b, _ := io.ReadAll(p.Body)
-						pattern := `(?mU)promo code (\S*)\.`
-						re := regexp.MustCompile(pattern)
-						match := re.FindStringSubmatch(string(b))
-						if strings.Contains(string(b), "promo") && len(match) > 1 {
-							value := match[1]
-							n.ReceiverEmails[address] = map[string]string{
-								"promoType": mailsubject,
-								"promoCode": value,
-							}
+				if _, ok := p.Header.(*mail.InlineHeader); ok {
+					b, _ := io.ReadAll(p.Body)
+					pattern := `(?is)<strong[^>]*>\s*([A-Za-z0-9]+)\s*</strong>`
+					re := regexp.MustCompile(pattern)
+					match := re.FindStringSubmatch(string(b))
+					if len(match) > 1 {
+						promo := map[string]string{
+							"promoType": subject,
+							"promoCode": match[1],
 						}
-					default:
-						continue
+						results[address] = append(results[address], promo)
 					}
 				}
 			}
 		}
 	}
 
-	return n.ReceiverEmails, nil
+	return results, nil
 }

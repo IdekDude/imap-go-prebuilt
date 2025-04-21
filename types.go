@@ -9,6 +9,8 @@ type ImapOpts struct {
 	CatchallPass  string
 	MaxChecks     int
 
+	Days int
+
 	// Multiple Accounts only
 	ReceiverEmails map[string]map[string]string
 }
